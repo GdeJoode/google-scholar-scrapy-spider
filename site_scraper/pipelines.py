@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import threading
@@ -9,6 +10,8 @@ from itemadapter import ItemAdapter
 from scrapy.pipelines.files import FilesPipeline
 from scrapy.pipelines.images import ImagesPipeline
 
+from site_scraper.items import PageItem, PublicationItem
+
 
 ICON_URL_PATTERN = re.compile(
     r"(favicon|sprite|/icons?/|[/-]icon[-_.]|/logos?/|logo\.|flag[s]?/)",
@@ -17,13 +20,11 @@ ICON_URL_PATTERN = re.compile(
 
 
 class ContentImageFilterPipeline:
-    """Drop URLs that clearly point at chrome (favicons, logos, flag sprites).
-
-    The size-based filter is applied later by ImagesPipeline via
-    IMAGES_MIN_WIDTH / IMAGES_MIN_HEIGHT.
-    """
+    """Drop URLs that clearly point at chrome (favicons, logos, flag sprites)."""
 
     def process_item(self, item, spider):
+        if not isinstance(item, PageItem):
+            return item
         adapter = ItemAdapter(item)
         urls = adapter.get("image_urls") or []
         kept = [u for u in urls if not ICON_URL_PATTERN.search(u)]
@@ -48,12 +49,98 @@ class SiteFilesPipeline(FilesPipeline):
 
 
 class SiteImagesPipeline(ImagesPipeline):
-    """Use default hash-based filenames for images; honours min-size from settings."""
+    """Use default hash-based filenames for images; honours min-size from settings.
+
+    Only processes PageItem — PublicationItem has no images.
+    """
+
+    def process_item(self, item, spider):
+        if not isinstance(item, PageItem):
+            return item
+        return super().process_item(item, spider)
+
+
+class DownloadsManifestPipeline:
+    """Records every downloaded file with its provenance (which page it
+    was discovered on, how it was found) and writes a single
+    downloads_manifest.jsonl at the end of the crawl."""
+
+    def __init__(self, output_path):
+        self.output_path = Path(output_path)
+        self._entries = {}  # url -> dict
+        self._lock = threading.Lock()
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        output_path = crawler.settings.get(
+            "SITE_DOWNLOADS_MANIFEST",
+            "output/downloads_manifest.jsonl",
+        )
+        return cls(output_path)
+
+    def process_item(self, item, spider):
+        adapter = ItemAdapter(item)
+        files = adapter.get("files") or []
+        if not files:
+            return item
+
+        if isinstance(item, PublicationItem):
+            referrer = adapter.get("origin_page_url") or ""
+            method = adapter.get("discovery_method") or ""
+            extra = {
+                "publication_title": adapter.get("publication_title") or "",
+                "search_engine": adapter.get("search_engine") or "",
+                "search_query": adapter.get("search_query") or "",
+                "fuzzy_score": adapter.get("fuzzy_score"),
+            }
+        else:
+            referrer = adapter.get("url") or ""
+            method = "direct-link"
+            extra = {}
+
+        with self._lock:
+            for info in files:
+                url = info.get("url")
+                path = info.get("path")
+                if not url or not path:
+                    continue
+                entry = self._entries.setdefault(
+                    url,
+                    {
+                        "pdf_url": url,
+                        "local_path": path,
+                        "discovery_methods": [],
+                        "referrers": [],
+                        "status": info.get("status"),
+                        "checksum": info.get("checksum"),
+                        **extra,
+                    },
+                )
+                if method and method not in entry["discovery_methods"]:
+                    entry["discovery_methods"].append(method)
+                if referrer and referrer not in entry["referrers"]:
+                    entry["referrers"].append(referrer)
+                # Extra fields (search metadata) are only overwritten if
+                # not already set to something non-empty.
+                for k, v in extra.items():
+                    if v and not entry.get(k):
+                        entry[k] = v
+        return item
+
+    def close_spider(self, spider):
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.output_path, "w", encoding="utf-8") as fh:
+            for entry in self._entries.values():
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 class MarkdownWriterPipeline:
     """Write a single pages.markdown file with per-page sections and
-    rewritten links that point at the locally downloaded images and files."""
+    rewritten links that point at the locally downloaded images and files.
+
+    PublicationItems from inline-scan / search are also appended as
+    their own short sections so that every downloaded PDF has a visible
+    trail in the markdown output."""
 
     def __init__(self, output_path, images_subdir, files_subdir):
         self.output_path = Path(output_path)
@@ -82,20 +169,26 @@ class MarkdownWriterPipeline:
             self._fh = None
 
     def process_item(self, item, spider):
+        if isinstance(item, PublicationItem):
+            self._write_publication(item)
+        else:
+            self._write_page(item)
+        return item
+
+    def _write_page(self, item):
         adapter = ItemAdapter(item)
         markdown = adapter.get("markdown") or ""
 
         url_to_local = {}
         for info in adapter.get("images") or []:
-            path = info.get("path")
-            url = info.get("url")
-            if path and url:
-                url_to_local[url] = f"./{self.images_subdir}/{path}"
+            if info.get("path") and info.get("url"):
+                url_to_local[info["url"]] = f"./{self.images_subdir}/{info['path']}"
+        downloads = []
         for info in adapter.get("files") or []:
-            path = info.get("path")
-            url = info.get("url")
-            if path and url:
-                url_to_local[url] = f"./{self.files_subdir}/{path}"
+            if info.get("path") and info.get("url"):
+                local = f"./{self.files_subdir}/{info['path']}"
+                url_to_local[info["url"]] = local
+                downloads.append((info["url"], local))
 
         for remote, local in url_to_local.items():
             markdown = markdown.replace(remote, local)
@@ -103,24 +196,58 @@ class MarkdownWriterPipeline:
         title = (adapter.get("title") or adapter.get("url") or "").strip()
         source_url = adapter.get("url") or ""
 
+        blocks = [f"\n\n# {title}\n\n", f"Source: <{source_url}>\n\n", markdown.strip()]
+
+        if downloads:
+            blocks.append("\n\n## Downloads\n\n")
+            blocks.append(
+                "\n".join(f"- [{remote}]({local})" for remote, local in downloads)
+            )
+
         external_links = adapter.get("external_links") or []
         if external_links:
-            ext_block = "\n\n## External links (not crawled)\n\n" + "\n".join(
-                f"- <{link}>" for link in external_links
-            )
-        else:
-            ext_block = ""
+            blocks.append("\n\n## External links (not crawled)\n\n")
+            blocks.append("\n".join(f"- <{link}>" for link in external_links))
 
-        section = (
-            f"\n\n# {title}\n\n"
-            f"Source: <{source_url}>\n\n"
-            f"{markdown.strip()}"
-            f"{ext_block}\n\n"
-            f"---\n"
-        )
+        blocks.append("\n\n---\n")
 
         with self._lock:
-            self._fh.write(section)
+            self._fh.write("".join(blocks))
             self._fh.flush()
 
-        return item
+    def _write_publication(self, item):
+        adapter = ItemAdapter(item)
+        title = adapter.get("publication_title") or adapter.get("pdf_url") or ""
+        origin = adapter.get("origin_page_url") or ""
+        method = adapter.get("discovery_method") or ""
+        engine = adapter.get("search_engine") or ""
+        query = adapter.get("search_query") or ""
+        score = adapter.get("fuzzy_score")
+        pdf_url = adapter.get("pdf_url") or ""
+
+        local_path = ""
+        for info in adapter.get("files") or []:
+            if info.get("path") and info.get("url") == pdf_url:
+                local_path = f"./{self.files_subdir}/{info['path']}"
+                break
+
+        lines = [
+            f"\n\n## Publication: {title}\n\n",
+            f"- Found on: <{origin}>\n",
+            f"- Discovery: {method}",
+        ]
+        if engine:
+            lines.append(f" via {engine}")
+        lines.append("\n")
+        if query:
+            lines.append(f"- Search query: `{query}`\n")
+        if score is not None:
+            lines.append(f"- Fuzzy score: {score}\n")
+        lines.append(f"- PDF: <{pdf_url}>\n")
+        if local_path:
+            lines.append(f"- Local: [{local_path}]({local_path})\n")
+        lines.append("\n---\n")
+
+        with self._lock:
+            self._fh.write("".join(lines))
+            self._fh.flush()

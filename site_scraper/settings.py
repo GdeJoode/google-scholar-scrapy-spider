@@ -44,6 +44,7 @@ ITEM_PIPELINES = {
     "site_scraper.pipelines.ContentImageFilterPipeline": 100,
     "site_scraper.pipelines.SiteFilesPipeline": 200,
     "site_scraper.pipelines.SiteImagesPipeline": 210,
+    "site_scraper.pipelines.DownloadsManifestPipeline": 300,
     "site_scraper.pipelines.MarkdownWriterPipeline": 900,
 }
 
@@ -51,6 +52,7 @@ ITEM_PIPELINES = {
 FILES_STORE = "output/downloads"
 IMAGES_STORE = "output/images"
 SITE_MARKDOWN_OUTPUT = "output/pages.markdown"
+SITE_DOWNLOADS_MANIFEST = "output/downloads_manifest.jsonl"
 
 IMAGES_MIN_HEIGHT = 200
 IMAGES_MIN_WIDTH = 200

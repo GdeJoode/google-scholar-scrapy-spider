@@ -39,10 +39,12 @@ directory it runs in:
 
 ```
 output/<spider-name>/
-├── pages.jsonl        # one JSON object per page (metadata, text, markdown, refs)
-├── pages.markdown     # all pages concatenated as markdown, with local links
-├── images/            # downloaded images, hash-named
-└── downloads/         # downloaded documents, <slug>_<hash>.<ext>
+├── pages.jsonl                # one JSON object per page
+├── publications.jsonl         # one JSON object per PDF found via inline-scan or search
+├── downloads_manifest.jsonl   # one JSON object per unique downloaded file
+├── pages.markdown             # all pages + publications concatenated as markdown
+├── images/                    # downloaded images, hash-named
+└── downloads/                 # downloaded documents, <slug>_<hash>.<ext>
 ```
 
 Inside `pages.markdown`, image and document URLs that matched a
@@ -59,6 +61,64 @@ Each JSON line in `pages.jsonl` also carries:
 - `external_links` (list of URLs) — links on that page that pointed
   at a further external domain and were **not** followed; review them
   later to decide whether to crawl any of those sites too.
+
+## Publication (PDF) discovery
+
+PDFs are found in three layered steps; each layer is only used when
+the previous one turns up nothing for a given page:
+
+1. **Direct links.** Any `<a href>` whose path ends in a document
+   extension (PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, CSV, ZIP).
+2. **Inline scan.** A regex pass over the full rendered HTML picks
+   up document URLs buried in inline JSON, `data-*` attributes, and
+   script blobs. This is what lets us bypass email-gated "download"
+   buttons when the file itself is publicly hosted on the same site.
+3. **Search fallback.** If a page looks like an email-gated
+   publication download (form with an email input + keywords like
+   "download" / "publicatie" / "rapport" nearby) **and** steps 1–2
+   produced nothing, the spider fires **one** search query
+   (`"<title>" filetype:pdf`) against DuckDuckGo's HTML endpoint,
+   fuzzy-matches the top PDF results against the page's `<h1>` /
+   `<title>` using `difflib.SequenceMatcher` (default threshold
+   0.55), and fetches the best match.
+
+DuckDuckGo is used instead of Google because Google aggressively
+blocks scraped queries with captchas. The engine is pluggable: point
+`publication_search_engine` at another implementation in a spider
+subclass if you have a Google Custom Search API key and want to wire
+that up.
+
+### downloads_manifest.jsonl
+
+Every downloaded file ends up in `downloads_manifest.jsonl` with its
+provenance so you can always see where a given PDF came from:
+
+```json
+{
+  "pdf_url": "https://cdn.example.nl/reports/rapport-2024.pdf",
+  "local_path": "rapport-2024_3f2a1b9c.pdf",
+  "discovery_methods": ["inline-scan"],
+  "referrers": ["https://www.platformisor.nl/publicaties/rapport-2024/"],
+  "publication_title": "Rapport 2024",
+  "search_engine": "",
+  "search_query": "",
+  "fuzzy_score": null,
+  "status": "downloaded",
+  "checksum": "..."
+}
+```
+
+For search-fallback finds the entry also includes the search query,
+engine, and fuzzy score so you can sanity-check questionable matches.
+
+If a publication search didn't produce a good enough fuzzy match, no
+PDF is downloaded and the spider logs a line like:
+
+```
+No fuzzy match for publication 'Rapport 2024' (best score=0.41, candidates=7)
+```
+
+so you can grep those out of the log and decide manually.
 
 ## Installation
 
