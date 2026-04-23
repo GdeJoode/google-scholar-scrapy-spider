@@ -18,16 +18,53 @@ ICON_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Matches the WordPress thumbnail suffix in image URLs, e.g.
+# "foo-124x124.jpg" or "bar-300x200.png". Lets us drop sub-min-size
+# thumbnails before hitting ImagesPipeline so we don't spam the log
+# with one ERROR per rejected thumbnail.
+THUMB_SIZE_RE = re.compile(
+    r"-(\d+)x(\d+)\.(?:jpe?g|png|gif|webp)(?:$|\?)",
+    re.IGNORECASE,
+)
+
+
+def _url_hints_too_small(url, min_w, min_h):
+    m = THUMB_SIZE_RE.search(url)
+    if not m:
+        return False
+    w, h = int(m.group(1)), int(m.group(2))
+    return w < min_w or h < min_h
+
 
 class ContentImageFilterPipeline:
-    """Drop URLs that clearly point at chrome (favicons, logos, flag sprites)."""
+    """Drop URLs that clearly point at chrome (favicons, logos, flag
+    sprites) or that the filename already reveals to be sub-min-size
+    WordPress thumbnails."""
+
+    def __init__(self, min_w=200, min_h=200):
+        self.min_w = min_w
+        self.min_h = min_h
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        settings = crawler.settings
+        return cls(
+            min_w=settings.getint("IMAGES_MIN_WIDTH", 200),
+            min_h=settings.getint("IMAGES_MIN_HEIGHT", 200),
+        )
 
     def process_item(self, item, spider):
         if not isinstance(item, PageItem):
             return item
         adapter = ItemAdapter(item)
         urls = adapter.get("image_urls") or []
-        kept = [u for u in urls if not ICON_URL_PATTERN.search(u)]
+        kept = []
+        for u in urls:
+            if ICON_URL_PATTERN.search(u):
+                continue
+            if _url_hints_too_small(u, self.min_w, self.min_h):
+                continue
+            kept.append(u)
         adapter["image_urls"] = kept
         return item
 
