@@ -127,6 +127,19 @@ pip install -r site_scraper/requirements.txt
 playwright install chromium
 ```
 
+### Running on Google Colab
+
+A ready-to-run notebook is checked in at the repo root:
+[`run_scraper.ipynb`](../run_scraper.ipynb). Open it directly in Colab via
+
+```
+https://colab.research.google.com/github/GdeJoode/google-scholar-scrapy-spider/blob/claude/build-website-scraper-AOTSB/run_scraper.ipynb
+```
+
+`Runtime` → `Run all` installs Playwright, checks out the feature
+branch, does a 25-page test crawl, and (optionally) persists output
+to Google Drive.
+
 ## Running
 
 From the repository root:
