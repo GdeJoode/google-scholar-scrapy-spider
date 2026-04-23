@@ -3,10 +3,22 @@ BOT_NAME = "site_scraper"
 SPIDER_MODULES = ["site_scraper.spiders"]
 NEWSPIDER_MODULE = "site_scraper.spiders"
 
-USER_AGENT = (
-    "site-scraper/0.1 "
-    "(+contact: set via SITE_SCRAPER_CONTACT env var)"
+# A realistic Chrome UA is needed — Cloudflare / WAFs behind these sites
+# return 403 to generic bot-looking UAs. The Playwright browser context
+# below is set to the same string so Chromium's network requests match.
+_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
+USER_AGENT = _BROWSER_UA
+
+DEFAULT_REQUEST_HEADERS = {
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+}
 
 ROBOTSTXT_OBEY = True
 
@@ -23,7 +35,9 @@ AUTOTHROTTLE_TARGET_CONCURRENCY = 2.0
 HTTPCACHE_ENABLED = True
 HTTPCACHE_DIR = "httpcache"
 HTTPCACHE_EXPIRATION_SECS = 7 * 24 * 3600
-HTTPCACHE_IGNORE_HTTP_CODES = [500, 502, 503, 504, 408, 429]
+# 403 must be here so that a one-off bot-block doesn't poison the cache
+# for every subsequent re-run after we tune UA / headers.
+HTTPCACHE_IGNORE_HTTP_CODES = [403, 408, 429, 500, 502, 503, 504]
 
 DOWNLOAD_HANDLERS = {
     "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
@@ -35,6 +49,21 @@ PLAYWRIGHT_BROWSER_TYPE = "chromium"
 PLAYWRIGHT_LAUNCH_OPTIONS = {
     "headless": True,
     "timeout": 30_000,
+    # Reduces the most obvious `navigator.webdriver` automation signal
+    # that fuels Cloudflare / similar bot-challenge pages.
+    "args": [
+        "--disable-blink-features=AutomationControlled",
+    ],
+}
+PLAYWRIGHT_CONTEXTS = {
+    "default": {
+        "user_agent": _BROWSER_UA,
+        "viewport": {"width": 1280, "height": 800},
+        "locale": "nl-NL",
+        "extra_http_headers": {
+            "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+        },
+    },
 }
 PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 30_000
 PLAYWRIGHT_MAX_CONTEXTS = 2
