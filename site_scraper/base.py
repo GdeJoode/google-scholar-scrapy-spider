@@ -1,13 +1,23 @@
-"""Shared base spider for crawling a root site plus (optionally) one hop
-onto any linked external sites.
+"""Shared base spider.
+
+Crawl rules:
+  - From the root site, crawl freely within `root_domains` (optionally
+    constrained by `allowed_path_prefix` / `deny_path_prefixes`).
+  - If `allow_off_site` is True, a link from the root site to an
+    external domain X is followed, and the crawl is allowed to keep
+    going within X. It is NOT allowed to hop onwards to a third domain
+    Y; any such link is recorded in `external_links` on that page so
+    the user can review later and decide whether to crawl Y.
+  - If `allow_off_site` is False, external links from the root site
+    are only recorded, never followed.
 
 Subclass BaseSiteSpider and set:
-  - name              : Scrapy spider name
-  - start_urls        : list of entry URLs
-  - root_domains      : set of hostnames considered "on site"
-  - allowed_path_prefix : optional; on-site URLs must start with this path
-  - deny_path_prefixes  : optional tuple of path prefixes to skip on-site
-  - allow_off_site    : if True, follow external links exactly one hop deep
+  - name
+  - start_urls
+  - root_domains
+  - allowed_path_prefix (optional)
+  - deny_path_prefixes (optional)
+  - allow_off_site (bool)
 """
 import re
 from datetime import datetime, timezone
@@ -59,6 +69,15 @@ def _playwright_meta():
     }
 
 
+def _registrable_domain(host):
+    """Strip a leading 'www.' so we can match 'example.nl' against
+    'www.example.nl' as the same site."""
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
 class BaseSiteSpider(scrapy.Spider):
     root_domains: set = set()
     allowed_path_prefix: str = ""
@@ -91,11 +110,11 @@ class BaseSiteSpider(scrapy.Spider):
 
     def start_requests(self):
         for url in self.start_urls:
-            yield self._build_request(url, off_site=False)
+            yield self._build_request(url, off_site_domain=None)
 
-    def _build_request(self, url, *, off_site):
+    def _build_request(self, url, *, off_site_domain):
         meta = _playwright_meta()
-        meta["off_site"] = off_site
+        meta["off_site_domain"] = off_site_domain
         return scrapy.Request(
             url,
             callback=self.parse,
@@ -111,7 +130,7 @@ class BaseSiteSpider(scrapy.Spider):
         if not isinstance(response, HtmlResponse):
             return
 
-        off_site = bool(response.meta.get("off_site"))
+        off_site_domain = response.meta.get("off_site_domain")
 
         full_soup = BeautifulSoup(response.text, "lxml")
         file_urls = self._collect_file_urls(full_soup, response.url)
@@ -147,6 +166,10 @@ class BaseSiteSpider(scrapy.Spider):
 
         image_urls = self._collect_image_urls(content_node, response.url)
 
+        follow_targets, external_links = self._classify_links(
+            full_soup, response.url, off_site_domain
+        )
+
         yield PageItem(
             url=response.url,
             title=(response.css("title::text").get() or "").strip(),
@@ -160,16 +183,14 @@ class BaseSiteSpider(scrapy.Spider):
             image_urls=image_urls,
             file_urls=file_urls,
             depth=response.meta.get("depth", 0),
-            off_site=off_site,
+            off_site=off_site_domain is not None,
+            off_site_domain=off_site_domain or "",
+            external_links=external_links,
             fetched_at=datetime.now(timezone.utc).isoformat(),
         )
 
-        if off_site:
-            # One hop only: capture this page, but don't chase its links.
-            return
-
-        for link, target_off_site in self._collect_follow_targets(full_soup, response.url):
-            yield self._build_request(link, off_site=target_off_site)
+        for link, target_off_site_domain in follow_targets:
+            yield self._build_request(link, off_site_domain=target_off_site_domain)
 
     def _collect_image_urls(self, content_node, base_url):
         urls, seen = [], set()
@@ -204,8 +225,16 @@ class BaseSiteSpider(scrapy.Spider):
                     urls.append(absolute)
         return urls
 
-    def _collect_follow_targets(self, soup, base_url):
+    def _classify_links(self, soup, base_url, current_off_site_domain):
+        """Return (followed, external).
+
+        followed: list of (absolute_url, new_off_site_domain_for_that_request)
+        external: list of absolute URLs that are not followed but recorded.
+        """
+        followed = []
+        external = []
         seen = set()
+
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
             if not href or href.startswith(("mailto:", "tel:", "javascript:")):
@@ -217,21 +246,43 @@ class BaseSiteSpider(scrapy.Spider):
             if absolute in seen:
                 continue
             seen.add(absolute)
+
             path = parsed.path or "/"
             if path.lower().endswith(DOWNLOAD_EXTENSIONS):
+                # Handled by FilesPipeline, not followed as a page.
                 continue
-            host = parsed.netloc.lower()
+
+            host = _registrable_domain(parsed.netloc)
+
             if self._is_root_host(host):
                 if self.allowed_path_prefix and not path.startswith(self.allowed_path_prefix):
                     continue
                 if any(path == p or path.startswith(p + "/") for p in self.deny_path_prefixes):
                     continue
-                yield absolute, False
-            elif self.allow_off_site:
-                yield absolute, True
+                followed.append((absolute, None))
+                continue
+
+            if current_off_site_domain is None:
+                # We're on the root site; this is a first external link.
+                if self.allow_off_site:
+                    followed.append((absolute, host))
+                else:
+                    external.append(absolute)
+            else:
+                # We're already on an external site.
+                if host == current_off_site_domain:
+                    # Same external site, keep crawling it.
+                    followed.append((absolute, current_off_site_domain))
+                else:
+                    # Would be a second hop to yet another domain — record only.
+                    external.append(absolute)
+
+        return followed, external
 
     def _is_root_host(self, host):
+        host = _registrable_domain(host)
         for root in self.root_domains:
+            root = _registrable_domain(root)
             if host == root or host.endswith("." + root):
                 return True
         return False

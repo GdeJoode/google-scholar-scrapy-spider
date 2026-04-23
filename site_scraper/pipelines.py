@@ -103,10 +103,19 @@ class MarkdownWriterPipeline:
         title = (adapter.get("title") or adapter.get("url") or "").strip()
         source_url = adapter.get("url") or ""
 
+        external_links = adapter.get("external_links") or []
+        if external_links:
+            ext_block = "\n\n## External links (not crawled)\n\n" + "\n".join(
+                f"- <{link}>" for link in external_links
+            )
+        else:
+            ext_block = ""
+
         section = (
             f"\n\n# {title}\n\n"
             f"Source: <{source_url}>\n\n"
-            f"{markdown.strip()}\n\n"
+            f"{markdown.strip()}"
+            f"{ext_block}\n\n"
             f"---\n"
         )
 

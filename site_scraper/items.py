@@ -13,4 +13,6 @@ class PageItem(scrapy.Item):
     files = scrapy.Field()
     depth = scrapy.Field()
     off_site = scrapy.Field()
+    off_site_domain = scrapy.Field()
+    external_links = scrapy.Field()
     fetched_at = scrapy.Field()

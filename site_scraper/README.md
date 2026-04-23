@@ -7,15 +7,30 @@ generated markdown so it references the locally downloaded files.
 
 ## Spiders
 
-| Spider          | Root site                       | Off-site hops | Other constraints |
-| --------------- | ------------------------------- | ------------- | ----------------- |
-| `oecd`          | `https://oecd.ai/en/`           | 0             | Only `/en/` paths; skips `/en/data` |
-| `agendastad`    | `https://agendastad.nl/`        | 1             | Follows city-deal sites one page deep |
-| `elkeregiotelt` | `https://www.elkeregiotelt.nl/` | 1             | Follows regiodeal / NPVR sites one page deep |
+| Spider          | Root site                       | Off-site | Other constraints |
+| --------------- | ------------------------------- | -------- | ----------------- |
+| `oecd`          | `https://oecd.ai/en/`           | no       | Only `/en/` paths; skips `/en/data` |
+| `agendastad`    | `https://agendastad.nl/`        | yes      | Follows each city-deal's own site (one domain deep) |
+| `elkeregiotelt` | `https://www.elkeregiotelt.nl/` | yes      | Follows each regiodeal / NPVR site (one domain deep) |
 
-"Off-site hops = 1" means: when the root site links out (e.g. a
-city-deal's own website), the linked page is fetched and saved, but
-links on that external page are **not** followed.
+### What "one domain deep" means
+
+When the root site links out to an external site X (for example a
+city-deal's own website), the spider will:
+
+- fetch that external page, and
+- keep crawling **within X** just like it would on the root site.
+
+But the spider never hops further: if a page on X links out to yet
+another domain Y, that link is **not** followed. Instead the URL is
+stored on that page's item (as `external_links` in
+`pages.jsonl`, and listed at the bottom of the page section in
+`pages.markdown`) so you can review later and decide whether Y is
+worth crawling separately.
+
+This keeps the crawl bounded — at most "root site" + "one external
+site per original link" — while still surfacing every onward link you
+might want to reconsider.
 
 ## Output layout
 
@@ -36,8 +51,14 @@ downloaded file have been rewritten to relative paths like
 markdown renders correctly when opened from the spider's output
 directory.
 
-Each JSON line in `pages.jsonl` also carries an `off_site` flag so you
-can tell root-site pages from one-hop external pages.
+Each JSON line in `pages.jsonl` also carries:
+
+- `off_site` (bool) and `off_site_domain` (str) — so you can tell
+  root-site pages from pages fetched on an external site, and see
+  which external site the crawl was restricted to at that point.
+- `external_links` (list of URLs) — links on that page that pointed
+  at a further external domain and were **not** followed; review them
+  later to decide whether to crawl any of those sites too.
 
 ## Installation
 
@@ -92,9 +113,12 @@ Please set a contact email for the crawl by editing `USER_AGENT` in
 - Playwright's `networkidle` wait has a 20s cap per page; JS-heavy
   pages that keep polling may still be captured with incomplete
   content.
-- For `agendastad` / `elkeregiotelt` the one-hop rule only applies to
-  links that appear on the root domain. An external page discovered
-  indirectly (e.g. via another external page) is never fetched.
+- External domains are only entered via a link on the root site. A
+  third domain discovered from within an external site is never
+  fetched — it is recorded in `external_links` instead so you can
+  review and possibly crawl it in a separate run.
+- Host matching ignores a leading `www.`, so `example.nl` and
+  `www.example.nl` are treated as the same site.
 
 ## Adding another site
 
