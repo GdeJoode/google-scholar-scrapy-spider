@@ -112,6 +112,14 @@ def _registrable_domain(host):
     return host
 
 
+def _safe_slug(s, max_len=80):
+    """Sanitise a string for use as a directory name: keep alphanumerics,
+    dashes, underscores and dots (so hostnames like 'example.nl' survive
+    intact), replace anything else with '_'."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", s).strip("._-")
+    return cleaned[:max_len] or "other"
+
+
 def _fuzzy_score(a, b):
     return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
@@ -163,6 +171,29 @@ class BaseSiteSpider(scrapy.Spider):
             },
             priority="spider",
         )
+
+    def file_group_path(self, item):
+        """Return a relative subdirectory for downloaded files/images
+        belonging to this item, used by SiteFilesPipeline /
+        SiteImagesPipeline to keep downloads organised.
+
+        Default: group by the hostname of the page where the
+        file/image was first seen — so agendastad files land in
+        `agendastad.nl/`, city-deal files in `citydeal-foo.nl/` etc.
+
+        Spiders can override this for a more specific layout (see
+        OecdSpider for an example that splits by URL section).
+        """
+        try:
+            from itemadapter import ItemAdapter
+            adapter = ItemAdapter(item)
+            source_url = adapter.get("origin_page_url") or adapter.get("url") or ""
+        except Exception:
+            source_url = ""
+        if not source_url:
+            return "other"
+        host = _registrable_domain(urlparse(source_url).netloc)
+        return _safe_slug(host) if host else "other"
 
     def start_requests(self):
         for url in self.start_urls:

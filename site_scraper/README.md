@@ -34,18 +34,68 @@ might want to reconsider.
 
 ## Output layout
 
-Each spider writes to its own directory, relative to the working
-directory it runs in:
+Each spider writes to its own directory. Downloads and images are
+**grouped into subdirectories** so they don't all pile up in one flat
+folder — the grouping key depends on the spider:
+
+### agendastad / elkeregiotelt — grouped by origin host
 
 ```
-output/<spider-name>/
-├── pages.jsonl                # one JSON object per page
-├── publications.jsonl         # one JSON object per PDF found via inline-scan or search
-├── downloads_manifest.jsonl   # one JSON object per unique downloaded file
-├── pages.markdown             # all pages + publications concatenated as markdown
-├── images/                    # downloaded images, hash-named
-└── downloads/                 # downloaded documents, <slug>_<hash>.<ext>
+output/agendastad/
+├── pages.jsonl
+├── publications.jsonl
+├── downloads_manifest.jsonl
+├── pages.markdown
+├── downloads/
+│   ├── agendastad.nl/              # files first seen on the root site
+│   │   └── <slug>_<hash>.pdf
+│   ├── platformisor.nl/            # one city-deal's own site
+│   │   └── ...
+│   ├── citydeal-digitale-stad.nl/
+│   │   └── ...
+│   └── ...
+└── images/
+    ├── agendastad.nl/<hash>.jpg
+    ├── platformisor.nl/<hash>.jpg
+    └── ...
 ```
+
+One subfolder per domain, so each city-deal's (or regiodeal's)
+material stays bundled together.
+
+### oecd — grouped by `/en/<section>/`
+
+Since everything lives on `oecd.ai`, the spider splits by the first
+URL segment after `/en/`:
+
+```
+output/oecd/
+├── pages.jsonl
+├── ...
+├── downloads/
+│   ├── oecd.ai/
+│   │   ├── policy-initiatives/
+│   │   ├── dashboards/
+│   │   ├── community/
+│   │   ├── wonk/
+│   │   └── ...
+└── images/
+    └── oecd.ai/
+        ├── policy-initiatives/<hash>.jpg
+        └── ...
+```
+
+The subdirectory is picked from the page URL where the file/image was
+first discovered; a PDF seen on multiple pages ends up in the
+subdirectory of whichever page found it first (every referrer is
+still recorded in `downloads_manifest.jsonl`).
+
+### Customising the grouping
+
+Every spider inherits a `file_group_path(item)` method from
+`BaseSiteSpider`; the default returns the host of the page. Override
+it in your spider to pick any relative path you like (see
+`oecd.py` for an example that looks at URL segments).
 
 Inside `pages.markdown`, image and document URLs that matched a
 downloaded file have been rewritten to relative paths like

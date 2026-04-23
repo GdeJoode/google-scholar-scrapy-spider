@@ -74,19 +74,39 @@ def _safe_filename(stem, max_len=80):
     return cleaned[:max_len] or "file"
 
 
+def _subdir_for(info, item):
+    """Ask the spider for a grouping subdir for this item. Falls back to
+    '' (flat layout) if the spider doesn't expose file_group_path."""
+    spider = getattr(info, "spider", None) if info is not None else None
+    if spider is None or item is None:
+        return ""
+    group = getattr(spider, "file_group_path", None)
+    if group is None:
+        return ""
+    try:
+        return (group(item) or "").strip("/")
+    except Exception:
+        return ""
+
+
 class SiteFilesPipeline(FilesPipeline):
-    """Preserve the original filename for downloads (PDF/DOC/XLS/...)."""
+    """Preserve the original filename for downloads (PDF/DOC/XLS/...) and
+    group them into per-spider subdirectories via the spider's
+    file_group_path(item) hook."""
 
     def file_path(self, request, response=None, info=None, *, item=None):
         parsed = urlparse(request.url)
         basename = os.path.basename(parsed.path) or "file"
         stem, ext = os.path.splitext(basename)
         digest = hashlib.sha1(request.url.encode("utf-8")).hexdigest()[:8]
-        return f"{_safe_filename(stem)}_{digest}{ext.lower()}"
+        filename = f"{_safe_filename(stem)}_{digest}{ext.lower()}"
+        subdir = _subdir_for(info, item)
+        return f"{subdir}/{filename}" if subdir else filename
 
 
 class SiteImagesPipeline(ImagesPipeline):
-    """Use default hash-based filenames for images; honours min-size from settings.
+    """Hash-named images, honours IMAGES_MIN_WIDTH/HEIGHT, and groups into
+    per-spider subdirectories like SiteFilesPipeline.
 
     Only processes PageItem — PublicationItem has no images.
     """
@@ -95,6 +115,12 @@ class SiteImagesPipeline(ImagesPipeline):
         if not isinstance(item, PageItem):
             return item
         return super().process_item(item, spider)
+
+    def file_path(self, request, response=None, info=None, *, item=None):
+        image_guid = hashlib.sha1(request.url.encode("utf-8")).hexdigest()
+        subdir = _subdir_for(info, item)
+        filename = f"{image_guid}.jpg"
+        return f"{subdir}/{filename}" if subdir else f"full/{filename}"
 
 
 class DownloadsManifestPipeline:
