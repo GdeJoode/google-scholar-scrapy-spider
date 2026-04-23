@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Scraper output
+output/
+httpcache/
+.scrapy/
+
+# Virtualenvs
+.venv/
+venv/
+env/

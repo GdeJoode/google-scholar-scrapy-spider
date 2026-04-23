@@ -1,0 +1,15 @@
+import scrapy
+
+
+class PageItem(scrapy.Item):
+    url = scrapy.Field()
+    title = scrapy.Field()
+    description = scrapy.Field()
+    text = scrapy.Field()
+    markdown = scrapy.Field()
+    image_urls = scrapy.Field()
+    images = scrapy.Field()
+    file_urls = scrapy.Field()
+    files = scrapy.Field()
+    depth = scrapy.Field()
+    fetched_at = scrapy.Field()
