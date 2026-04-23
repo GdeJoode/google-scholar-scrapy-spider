@@ -3,13 +3,29 @@
 Crawl rules:
   - From the root site, crawl freely within `root_domains` (optionally
     constrained by `allowed_path_prefix` / `deny_path_prefixes`).
-  - If `allow_off_site` is True, a link from the root site to an
-    external domain X is followed, and the crawl is allowed to keep
-    going within X. It is NOT allowed to hop onwards to a third domain
-    Y; any such link is recorded in `external_links` on that page so
-    the user can review later and decide whether to crawl Y.
-  - If `allow_off_site` is False, external links from the root site
-    are only recorded, never followed.
+  - External links are always recorded in `external_links` on the
+    PageItem they were found on, so you can review them afterwards.
+  - By default, external links are NOT followed. Each off-site domain
+    must be explicitly approved, either via a spider attribute
+    (`allowed_off_site_domains`) or CLI args:
+        -a off_site_domains=example.nl,another.nl
+        -a off_site_from_file=output/<spider>/approved_off_site.txt
+  - Once a domain is approved, the spider crawls freely inside it but
+    never hops onwards to a third domain; any such onward link is
+    recorded as an `external_link` instead.
+
+Intended workflow for sites with many external links (e.g.
+elkeregiotelt.nl linking out to tweedekamer.nl, regiodeals, ...):
+
+  1. Run the root crawl with no approved domains; it only covers the
+     root site and collects external_links.
+  2. Run the review helper:
+        python -m site_scraper.review_externals <spider>
+     which aggregates per-domain counts and writes a candidates file.
+     Edit it to un-comment the domains you want to include.
+  3. Run the spider again with
+        -a off_site_from_file=output/<spider>/approved_off_site.txt
+     to crawl the approved external domains.
 
 Publication (PDF) discovery is layered:
 
@@ -28,7 +44,7 @@ Subclass BaseSiteSpider and set:
   - root_domains
   - allowed_path_prefix (optional)
   - deny_path_prefixes (optional)
-  - allow_off_site (bool)
+  - allowed_off_site_domains (optional; usually overridden via CLI)
 """
 import difflib
 import re
@@ -128,12 +144,46 @@ class BaseSiteSpider(scrapy.Spider):
     root_domains: set = set()
     allowed_path_prefix: str = ""
     deny_path_prefixes: tuple = ()
-    allow_off_site: bool = False
+
+    # Domains outside `root_domains` that are explicitly approved for
+    # off-site crawling. Default empty: the spider stays on the root
+    # site and only records external links in `external_links`.
+    # Populate via CLI on a follow-up run:
+    #   scrapy crawl <spider> -a off_site_domains=example.nl,other.nl
+    #   scrapy crawl <spider> -a off_site_from_file=output/<spider>/approved_off_site.txt
+    allowed_off_site_domains: set = frozenset()
 
     # Publication-search fallback settings
     publication_search_enabled: bool = True
     publication_search_min_ratio: float = 0.55
     publication_search_engine: str = "duckduckgo"  # only engine supported out of the box
+
+    def __init__(self, *args, off_site_domains=None, off_site_from_file=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        approved = set(_registrable_domain(d) for d in self.allowed_off_site_domains if d)
+        if off_site_domains:
+            for d in off_site_domains.split(","):
+                d = d.strip()
+                if d:
+                    approved.add(_registrable_domain(d))
+        if off_site_from_file:
+            from pathlib import Path as _P
+            path = _P(off_site_from_file)
+            if path.exists():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    approved.add(_registrable_domain(line))
+            else:
+                self.logger.warning("off_site_from_file not found: %s", path)
+        self.allowed_off_site_domains = frozenset(approved)
+        if self.allowed_off_site_domains:
+            self.logger.info(
+                "Off-site crawling approved for %d domain(s): %s",
+                len(self.allowed_off_site_domains),
+                ", ".join(sorted(self.allowed_off_site_domains)),
+            )
 
     @classmethod
     def update_settings(cls, settings):
@@ -530,14 +580,20 @@ class BaseSiteSpider(scrapy.Spider):
                 continue
 
             if current_off_site_domain is None:
-                if self.allow_off_site:
+                # On the root site: external links are only followed if the
+                # target domain has been explicitly approved for this run.
+                if host in self.allowed_off_site_domains:
                     followed.append((absolute, host))
                 else:
                     external.append(absolute)
             else:
+                # Already on an approved off-site domain.
                 if host == current_off_site_domain:
                     followed.append((absolute, current_off_site_domain))
                 else:
+                    # Links to a third domain (even if it's also approved):
+                    # record them but don't follow from here, to keep each
+                    # off-site crawl bounded to a single domain.
                     external.append(absolute)
 
         return followed, external

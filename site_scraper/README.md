@@ -7,30 +7,49 @@ generated markdown so it references the locally downloaded files.
 
 ## Spiders
 
-| Spider          | Root site                       | Off-site | Other constraints |
-| --------------- | ------------------------------- | -------- | ----------------- |
-| `oecd`          | `https://oecd.ai/en/`           | no       | Only `/en/` paths; skips `/en/data` |
-| `agendastad`    | `https://agendastad.nl/`        | yes      | Follows each city-deal's own site (one domain deep) |
-| `elkeregiotelt` | `https://www.elkeregiotelt.nl/` | yes      | Follows each regiodeal / NPVR site (one domain deep) |
+| Spider          | Root site                       | Other constraints |
+| --------------- | ------------------------------- | ----------------- |
+| `oecd`          | `https://oecd.ai/en/`           | Only `/en/` paths; skips `/en/data` |
+| `agendastad`    | `https://agendastad.nl/`        | — |
+| `elkeregiotelt` | `https://www.elkeregiotelt.nl/` | — |
 
-### What "one domain deep" means
+### Two-phase workflow: root crawl, then approved off-site
 
-When the root site links out to an external site X (for example a
-city-deal's own website), the spider will:
+Each spider by default stays strictly within its root domain(s). Any
+link pointing to a different domain is **recorded** as an
+`external_link` on the page's item, but **not followed**. This keeps
+the first crawl bounded and predictable.
 
-- fetch that external page, and
-- keep crawling **within X** just like it would on the root site.
+After the first crawl, use the review helper to decide which
+external domains (if any) are worth crawling in a follow-up run:
 
-But the spider never hops further: if a page on X links out to yet
-another domain Y, that link is **not** followed. Instead the URL is
-stored on that page's item (as `external_links` in
-`pages.jsonl`, and listed at the bottom of the page section in
-`pages.markdown`) so you can review later and decide whether Y is
-worth crawling separately.
+```bash
+python -m site_scraper.review_externals elkeregiotelt
+```
 
-This keeps the crawl bounded — at most "root site" + "one external
-site per original link" — while still surfacing every onward link you
-might want to reconsider.
+It aggregates per-domain counts, prints a ranked table, and writes:
+
+- `output/<spider>/external_domains.jsonl` — machine-readable
+- `output/<spider>/approved_off_site.txt` — human-editable; every
+  domain starts with `# ` (commented out). Remove the `# ` from
+  domains you want to include, then re-run the spider:
+
+```bash
+scrapy crawl elkeregiotelt \
+    -a off_site_from_file=output/elkeregiotelt/approved_off_site.txt
+```
+
+You can also pass domains directly on the command line:
+
+```bash
+scrapy crawl elkeregiotelt -a off_site_domains=platformisor.nl,citydeal-foo.nl
+```
+
+Inside an approved off-site domain the spider crawls freely, but it
+never hops further — if pages on `platformisor.nl` link to
+`rijksoverheid.nl`, those URLs are again recorded as `external_links`
+instead of followed. Run the review helper again if you want to
+approve another domain.
 
 ## Output layout
 
