@@ -1,3 +1,33 @@
+import logging as _logging
+
+
+class _QuietExpectedMediaErrors(_logging.Filter):
+    """Drops the ERROR + traceback spam that scrapy.pipelines.{files,media}
+    produces every time an image fails the min-size check or a PDF download
+    is blocked by the target's robots.txt.
+
+    These are expected outcomes (IMAGES_MIN_WIDTH/HEIGHT filtering and
+    ROBOTSTXT_OBEY=True), not actionable errors. The log still shows the
+    summary counts in the final scrapy stats dump, so nothing is hidden —
+    just quieter."""
+
+    _NOISE_PATTERNS = (
+        "Image too small",
+        "File (error)",
+        "File (unknown-error)",
+        "FileException",
+        "Forbidden by robots.txt",
+    )
+
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(p in msg for p in self._NOISE_PATTERNS)
+
+
+for _name in ("scrapy.pipelines.media", "scrapy.pipelines.files"):
+    _logging.getLogger(_name).addFilter(_QuietExpectedMediaErrors())
+
+
 BOT_NAME = "site_scraper"
 
 SPIDER_MODULES = ["site_scraper.spiders"]

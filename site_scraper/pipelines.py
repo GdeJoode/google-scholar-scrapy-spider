@@ -14,7 +14,21 @@ from site_scraper.items import PageItem, PublicationItem
 
 
 ICON_URL_PATTERN = re.compile(
-    r"(favicon|sprite|/icons?/|[/-]icon[-_.]|/logos?/|logo\.|flag[s]?/)",
+    r"(favicon"
+    r"|sprite"
+    r"|/icons?/"
+    r"|[/-]icon[-_.]"
+    r"|/logos?/"
+    r"|logo\."
+    r"|flag[s]?/"
+    # Drupal image styles: /sites/.../styles/<style>/public/... Most
+    # "thumbnail"-ish styles produce images well below our min-size,
+    # so skip them at URL level to avoid downloading just to discard.
+    r"|/styles/(thumbnail|thumb|square|small|teaser|medium_teaser|list|tile)/"
+    # Generic thumbnail path segments seen in various CMSes.
+    r"|/thumbs?/"
+    r"|/thumbnails?/"
+    r")",
     re.IGNORECASE,
 )
 
