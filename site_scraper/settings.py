@@ -1,11 +1,11 @@
-BOT_NAME = "oecd_scraper"
+BOT_NAME = "site_scraper"
 
-SPIDER_MODULES = ["oecd_scraper.spiders"]
-NEWSPIDER_MODULE = "oecd_scraper.spiders"
+SPIDER_MODULES = ["site_scraper.spiders"]
+NEWSPIDER_MODULE = "site_scraper.spiders"
 
 USER_AGENT = (
-    "oecd-ai-research-scraper/0.1 "
-    "(+contact: set via OECD_SCRAPER_CONTACT env var)"
+    "site-scraper/0.1 "
+    "(+contact: set via SITE_SCRAPER_CONTACT env var)"
 )
 
 ROBOTSTXT_OBEY = True
@@ -41,14 +41,16 @@ PLAYWRIGHT_MAX_CONTEXTS = 2
 PLAYWRIGHT_MAX_PAGES_PER_CONTEXT = 4
 
 ITEM_PIPELINES = {
-    "oecd_scraper.pipelines.ContentImageFilterPipeline": 100,
-    "oecd_scraper.pipelines.OecdFilesPipeline": 200,
-    "oecd_scraper.pipelines.OecdImagesPipeline": 210,
-    "oecd_scraper.pipelines.MarkdownWriterPipeline": 900,
+    "site_scraper.pipelines.ContentImageFilterPipeline": 100,
+    "site_scraper.pipelines.SiteFilesPipeline": 200,
+    "site_scraper.pipelines.SiteImagesPipeline": 210,
+    "site_scraper.pipelines.MarkdownWriterPipeline": 900,
 }
 
+# Defaults; BaseSiteSpider.update_settings overrides these to output/<spider>/
 FILES_STORE = "output/downloads"
 IMAGES_STORE = "output/images"
+SITE_MARKDOWN_OUTPUT = "output/pages.markdown"
 
 IMAGES_MIN_HEIGHT = 200
 IMAGES_MIN_WIDTH = 200
@@ -56,17 +58,6 @@ IMAGES_MIN_WIDTH = 200
 MEDIA_ALLOW_REDIRECTS = True
 FILES_EXPIRES = 90
 IMAGES_EXPIRES = 90
-
-FEEDS = {
-    "output/pages.jsonl": {
-        "format": "jsonlines",
-        "encoding": "utf-8",
-        "overwrite": False,
-        "item_export_kwargs": {
-            "ensure_ascii": False,
-        },
-    },
-}
 
 REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"
 FEED_EXPORT_ENCODING = "utf-8"

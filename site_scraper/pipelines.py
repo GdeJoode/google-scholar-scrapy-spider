@@ -36,7 +36,7 @@ def _safe_filename(stem, max_len=80):
     return cleaned[:max_len] or "file"
 
 
-class OecdFilesPipeline(FilesPipeline):
+class SiteFilesPipeline(FilesPipeline):
     """Preserve the original filename for downloads (PDF/DOC/XLS/...)."""
 
     def file_path(self, request, response=None, info=None, *, item=None):
@@ -47,7 +47,7 @@ class OecdFilesPipeline(FilesPipeline):
         return f"{_safe_filename(stem)}_{digest}{ext.lower()}"
 
 
-class OecdImagesPipeline(ImagesPipeline):
+class SiteImagesPipeline(ImagesPipeline):
     """Use default hash-based filenames for images; honours min-size from settings."""
 
 
@@ -69,12 +69,12 @@ class MarkdownWriterPipeline:
         files_store = settings.get("FILES_STORE", "output/downloads")
         images_subdir = os.path.basename(os.path.normpath(images_store)) or "images"
         files_subdir = os.path.basename(os.path.normpath(files_store)) or "downloads"
-        output_path = settings.get("OECD_MARKDOWN_OUTPUT", "output/pages.markdown")
+        output_path = settings.get("SITE_MARKDOWN_OUTPUT", "output/pages.markdown")
         return cls(output_path, images_subdir, files_subdir)
 
     def open_spider(self, spider):
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(self.output_path, "a", encoding="utf-8")
+        self._fh = open(self.output_path, "w", encoding="utf-8")
 
     def close_spider(self, spider):
         if self._fh:

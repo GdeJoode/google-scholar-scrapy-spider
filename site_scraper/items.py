@@ -12,4 +12,5 @@ class PageItem(scrapy.Item):
     file_urls = scrapy.Field()
     files = scrapy.Field()
     depth = scrapy.Field()
+    off_site = scrapy.Field()
     fetched_at = scrapy.Field()
