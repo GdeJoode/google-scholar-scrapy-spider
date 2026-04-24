@@ -7,11 +7,12 @@ generated markdown so it references the locally downloaded files.
 
 ## Spiders
 
-| Spider          | Root site                       | Other constraints |
-| --------------- | ------------------------------- | ----------------- |
-| `oecd`          | `https://oecd.ai/en/`           | Only `/en/` paths; skips `/en/data` |
-| `agendastad`    | `https://agendastad.nl/`        | — |
-| `elkeregiotelt` | `https://www.elkeregiotelt.nl/` | — |
+| Spider            | Root site                                 | Other constraints |
+| ----------------- | ----------------------------------------- | ----------------- |
+| `oecd`            | `https://oecd.ai/en/`                     | Only `/en/` paths; skips `/en/data` |
+| `agendastad`      | `https://agendastad.nl/`                  | — |
+| `elkeregiotelt`   | `https://www.elkeregiotelt.nl/`           | — |
+| `digitaleconomy`  | `https://digitaleconomy.stanford.edu/`    | Other Stanford subdomains go to `external_links` |
 
 ### Two-phase workflow: root crawl, then approved off-site
 
