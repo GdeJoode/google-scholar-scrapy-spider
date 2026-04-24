@@ -45,11 +45,18 @@ You can also pass domains directly on the command line:
 scrapy crawl elkeregiotelt -a off_site_domains=platformisor.nl,citydeal-foo.nl
 ```
 
-Inside an approved off-site domain the spider crawls freely, but it
-never hops further — if pages on `platformisor.nl` link to
-`rijksoverheid.nl`, those URLs are again recorded as `external_links`
-instead of followed. Run the review helper again if you want to
-approve another domain.
+Approving a domain does **not** unleash a full crawl of that domain.
+For each URL that the root site actually linked to on that domain,
+the spider visits exactly that one landing page: it extracts the
+page text / markdown, downloads any PDFs referenced on it, and
+stops — no onward link-following within the external site. Links
+discovered on those external pages end up in `external_links`
+again, so after phase 2 you can iterate and approve more domains if
+something interesting shows up.
+
+This keeps "approved = tweedekamer.nl" from hoovering up the entire
+Tweede Kamer site when elkeregiotelt.nl only references a handful of
+specific URLs there.
 
 ## Output layout
 
