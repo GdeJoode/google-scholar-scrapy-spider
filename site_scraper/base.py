@@ -1,36 +1,35 @@
 """Shared base spider.
 
-Crawl rules:
-  - From the root site, crawl freely within `root_domains` (optionally
-    constrained by `allowed_path_prefix` / `deny_path_prefixes`).
-  - External links are always recorded in `external_links` on the
-    PageItem they were found on, so you can review them afterwards.
-  - By default, external links are NOT followed. Each off-site domain
-    must be explicitly approved, either via a spider attribute
-    (`allowed_off_site_domains`) or CLI args:
-        -a off_site_domains=example.nl,another.nl
+Two layers of off-site behaviour:
+
+  * Automatic landing-page visits (always, no approval needed):
+    - Crawl freely within `root_domains` (optionally constrained by
+      `allowed_path_prefix` / `deny_path_prefixes`).
+    - For every link the root site has to a different domain, visit
+      that exact URL once as a landing-page visit: save its text /
+      markdown and download any PDFs it references. No further links
+      on that external page are followed; every link encountered on
+      it is recorded in `external_links` instead.
+
+  * Optional per-domain escalation to a full crawl:
+    - List domains in `allowed_off_site_domains` (or via CLI args:
+        -a off_site_domains=example.nl,other.nl
         -a off_site_from_file=output/<spider>/approved_off_site.txt
-  - When a domain is approved, the spider visits each URL on that
-    domain that was referenced from the root site exactly ONCE as a
-    landing-page visit: it saves the page's text/markdown and
-    downloads any PDFs found on it, but does NOT follow any further
-    links on that external page. Links discovered on external pages
-    (including to other external domains) are added to
-    `external_links` for possible review in a follow-up round.
+      ) to opt them in to a recursive crawl. Same-domain links on
+      those external pages will then be followed like root-site
+      links; links to yet another domain are still only recorded.
 
-Intended workflow for sites with many external links (e.g.
-elkeregiotelt.nl linking out to tweedekamer.nl, regiodeals, ...):
+Intended workflow:
 
-  1. Run the root crawl with no approved domains; it only covers the
-     root site and collects external_links.
-  2. Run the review helper:
+  1. Run the crawl. You get the root site + one landing-page visit
+     per external URL it links to (incl. any PDFs on those pages).
+  2. Inspect `external_links` in pages.jsonl or run
         python -m site_scraper.review_externals <spider>
-     which aggregates per-domain counts and writes a candidates file.
-     Edit it to un-comment the domains you want to include.
-  3. Run the spider again with
+     to see which external domains are referenced most often.
+  3. If a domain is worth a full recursive crawl, un-comment it in
+     `approved_off_site.txt` and re-run with
         -a off_site_from_file=output/<spider>/approved_off_site.txt
-     to visit each approved external URL as a single landing page
-     (content + PDFs only, no onward crawling).
+     to escalate that domain to a recursive crawl.
 
 Publication (PDF) discovery is layered:
 
@@ -556,17 +555,22 @@ class BaseSiteSpider(scrapy.Spider):
     def _classify_links(self, soup, base_url, current_off_site_domain):
         """Return (followed, external).
 
-        On the root site, internal links are followed and links to an
-        approved off-site domain are followed ONCE (as landing-page
-        visits — see below).
+        Behaviour:
 
-        On an approved off-site page, **no** links are followed further:
-        the spider visits just that one landing page, harvests its
-        content and any PDFs it references, and stops. Every link on
-        the external page is recorded in `external_links` for later
-        review. This prevents an approved domain like `tweedekamer.nl`
-        from triggering a full site crawl when it is only linked to
-        for a handful of specific URLs.
+          * On the root site:
+              - root-internal links: followed normally.
+              - links to any other domain: always visited ONCE as a
+                landing page (so the spider can harvest text/markdown
+                and any PDFs there). No approval required.
+
+          * On an external landing page whose domain is NOT in
+            `allowed_off_site_domains`: no links are followed.
+            Everything is recorded in `external_links` for review.
+
+          * On an external landing page whose domain IS in
+            `allowed_off_site_domains` (the user explicitly escalated
+            it to a full recursive crawl): same-domain links are
+            followed; links to yet another domain are only recorded.
         """
         followed = []
         external = []
@@ -586,15 +590,14 @@ class BaseSiteSpider(scrapy.Spider):
 
             path = parsed.path or "/"
             if path.lower().endswith(DOWNLOAD_EXTENSIONS):
-                # PDFs/docs are handled by FilesPipeline, not followed as pages.
+                # Docs are handled by FilesPipeline, not followed as pages.
                 continue
 
             host = _registrable_domain(parsed.netloc)
 
             if self._is_root_host(host):
                 if current_off_site_domain is not None:
-                    # We're on an external landing page; the root was
-                    # already crawled in phase 1, so skip back-links.
+                    # On an external landing page: root was already crawled.
                     continue
                 if self.allowed_path_prefix and not path.startswith(self.allowed_path_prefix):
                     continue
@@ -605,15 +608,18 @@ class BaseSiteSpider(scrapy.Spider):
 
             # Non-root host.
             if current_off_site_domain is None:
-                # On the root site: follow one level into an approved
-                # external domain (that request will be handled as a
-                # landing-page visit, see above).
-                if host in self.allowed_off_site_domains:
-                    followed.append((absolute, host))
-                else:
-                    external.append(absolute)
+                # Root-site page linking out: always visit the target URL
+                # once as a landing page.
+                followed.append((absolute, host))
+            elif (
+                host == current_off_site_domain
+                and current_off_site_domain in self.allowed_off_site_domains
+            ):
+                # On an approved external domain: keep crawling inside it.
+                followed.append((absolute, current_off_site_domain))
             else:
-                # Already on an external landing page: never follow.
+                # External landing page that isn't escalated to full crawl,
+                # or link to a third domain from inside an approved crawl.
                 external.append(absolute)
 
         return followed, external

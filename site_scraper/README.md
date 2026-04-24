@@ -14,50 +14,54 @@ generated markdown so it references the locally downloaded files.
 | `elkeregiotelt`   | `https://www.elkeregiotelt.nl/`           | — |
 | `digitaleconomy`  | `https://digitaleconomy.stanford.edu/`    | Other Stanford subdomains go to `external_links` |
 
-### Two-phase workflow: root crawl, then approved off-site
+### Off-site behaviour: automatic landing-page visits + optional full-crawl escalation
 
-Each spider by default stays strictly within its root domain(s). Any
-link pointing to a different domain is **recorded** as an
-`external_link` on the page's item, but **not followed**. This keeps
-the first crawl bounded and predictable.
+Every spider has two layers of off-site behaviour.
 
-After the first crawl, use the review helper to decide which
-external domains (if any) are worth crawling in a follow-up run:
+**Layer 1 — automatic landing-page visits** (no approval required).
+Whenever the root site links to a page on a different domain, the
+spider visits that exact URL once: it saves the page text and
+markdown, downloads any PDFs referenced on it, and stops there. No
+further links on that external page are followed; everything on it
+is added to `external_links` for review. This runs on every crawl so
+you automatically harvest referenced PDFs without pulling in whole
+external sites.
+
+**Layer 2 — optional full-crawl escalation** (opt-in, per domain).
+If you decide an external domain is worth crawling recursively, list
+it in `approved_off_site.txt` or pass it on the command line. The
+spider will then follow same-domain links within that domain the
+same way it follows root-site links.
+
+Use the review helper after a crawl to see which external domains
+are referenced:
 
 ```bash
 python -m site_scraper.review_externals elkeregiotelt
 ```
 
-It aggregates per-domain counts, prints a ranked table, and writes:
+It aggregates per-domain counts and writes:
 
 - `output/<spider>/external_domains.jsonl` — machine-readable
 - `output/<spider>/approved_off_site.txt` — human-editable; every
   domain starts with `# ` (commented out). Remove the `# ` from
-  domains you want to include, then re-run the spider:
+  domains you want a full recursive crawl of, then re-run:
 
 ```bash
 scrapy crawl elkeregiotelt \
     -a off_site_from_file=output/elkeregiotelt/approved_off_site.txt
 ```
 
-You can also pass domains directly on the command line:
+Or pass domains inline:
 
 ```bash
 scrapy crawl elkeregiotelt -a off_site_domains=platformisor.nl,citydeal-foo.nl
 ```
 
-Approving a domain does **not** unleash a full crawl of that domain.
-For each URL that the root site actually linked to on that domain,
-the spider visits exactly that one landing page: it extracts the
-page text / markdown, downloads any PDFs referenced on it, and
-stops — no onward link-following within the external site. Links
-discovered on those external pages end up in `external_links`
-again, so after phase 2 you can iterate and approve more domains if
-something interesting shows up.
-
-This keeps "approved = tweedekamer.nl" from hoovering up the entire
-Tweede Kamer site when elkeregiotelt.nl only references a handful of
-specific URLs there.
+Within an approved domain, links to yet another domain are still
+only recorded as `external_links` — the bounded-crawl rule keeps
+you from accidentally sucking in a third site. Run the review
+helper again if you want to escalate another domain.
 
 ## Output layout
 
