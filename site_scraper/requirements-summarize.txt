@@ -1,0 +1,6 @@
+docling>=2.10
+sentence-transformers>=3.0
+scikit-learn>=1.4
+openai>=1.40
+pyyaml>=6.0
+numpy>=1.24

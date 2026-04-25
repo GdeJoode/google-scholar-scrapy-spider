@@ -286,10 +286,98 @@ class ExampleSpider(BaseSiteSpider):
     name = "example"
     start_urls = ["https://example.org/"]
     root_domains = {"example.org"}
-    allow_off_site = False          # or True for 1-hop off-site
-    # allowed_path_prefix = "/en/"  # optional
-    # deny_path_prefixes = ("/data",)  # optional
+    # allowed_path_prefix = "/en/"        # optional
+    # deny_path_prefixes = ("/data",)     # optional
+    # allowed_off_site_domains = {"x.nl"}  # optional; usually overridden via CLI
 ```
 
 No other changes required — pipelines and per-spider output directories
 are inherited automatically.
+
+## Summarising downloaded documents
+
+After a crawl, every PDF / PPTX in `output/<spider>/downloads/` can be
+turned into a structured markdown summary with a RAPTOR-style
+hierarchical summary tree and a TreeKG-style topic tree.
+
+The pipeline:
+
+1. **Parse** with [docling](https://github.com/DS4SD/docling) — handles
+   PDF + PPTX, OCR for scanned pages.
+2. **Extract metadata + topic tree** by prompting an LLM on the first
+   ~8k characters: title, authors, publication year/month,
+   organisation, and a 3–7 main-topic / subtopics tree.
+3. **RAPTOR** — chunk the text, embed locally with
+   `sentence-transformers/all-MiniLM-L6-v2`, cluster with a Gaussian
+   mixture, recursively summarise clusters until a single root summary
+   remains.
+4. **Write** `output/<spider>/summaries/<original-relpath>.md` with
+   YAML frontmatter and the summary tree + topic tree as body.
+5. **Build the overview table** that aggregates all frontmatters into
+   `output/<spider>/summaries/_overview.md`.
+
+LLM: NVIDIA Build by default (free tier on
+[build.nvidia.com](https://build.nvidia.com), OpenAI-compatible API).
+Default model: `mistralai/mistral-medium-3-instruct`. Override with
+`--model` and/or `--llm-base-url` for any other OpenAI-compatible
+provider.
+
+```bash
+# Install once
+pip install -r site_scraper/requirements-summarize.txt
+
+# Set your NVIDIA Build key
+export NVIDIA_API_KEY=nvapi-...
+
+# Run on one spider's downloads (use --limit for a smoke test)
+python -m site_scraper.summarize_documents elkeregiotelt --limit 3
+
+# Build the overview table
+python -m site_scraper.build_overview elkeregiotelt
+```
+
+Each summary file looks like:
+
+```markdown
+---
+title: "Rapport X"
+authors:
+  - "Doe, Jane"
+publication_year: 2024
+publication_month: 3
+organisation: "Some Org"
+topics:
+  - main: "AI governance"
+    subtopics: ["risk frameworks", "EU AI Act"]
+  - main: "Data sharing"
+    subtopics: ["interoperability"]
+source_pdf: "https://.../rapport-x.pdf"
+local_pdf: "downloads/.../rapport-x.pdf"
+summarized_at: "2026-04-23T12:34:56+00:00"
+llm_model: "mistralai/mistral-medium-3-instruct"
+---
+
+# Rapport X
+
+## Overall summary
+…
+
+## Level 1 cluster summaries
+### Cluster 1
+…
+
+## Topic tree
+- **AI governance**
+  - risk frameworks
+  - EU AI Act
+- **Data sharing**
+  - interoperability
+```
+
+The overview table (`_overview.md`) lists every summarised document
+with its title, date, organisation, topics and links to both the
+summary file and the source PDF — handy as the index for an obsidian
+/ similar vault.
+
+Re-running the summariser is incremental: documents that already have
+a `.md` output are skipped unless you pass `--force`.
