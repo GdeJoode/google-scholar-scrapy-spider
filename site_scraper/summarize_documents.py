@@ -52,7 +52,8 @@ DEFAULT_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 CHUNK_WORDS = 600
 MAX_TREE_DEPTH = 3
-METADATA_HEAD_CHARS = 8000
+METADATA_HEAD_CHARS = 4000  # smaller prompts -> fewer 504s on free tiers
+LLM_RETRIES = 5
 
 
 def _load_heavy_deps():
@@ -107,7 +108,7 @@ def _make_client(OpenAI, base_url, env_var):
 
 
 def _llm_call(client, model, prompt, *, system=None, max_tokens=800,
-              temperature=0.2, retries=3):
+              temperature=0.2, retries=LLM_RETRIES):
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -122,11 +123,16 @@ def _llm_call(client, model, prompt, *, system=None, max_tokens=800,
                 temperature=temperature,
             )
             return resp.choices[0].message.content.strip()
-        except Exception as exc:  # network / rate limit / etc.
+        except Exception as exc:  # network / rate limit / 5xx / etc.
             last_err = exc
-            wait = 2 ** attempt
-            print(f"    LLM call failed ({exc!r}); retrying in {wait}s...",
-                  file=sys.stderr)
+            # Generous backoff: free-tier gateways often need real seconds
+            # to recover from a 504. Caps at 60s.
+            wait = min(60, 5 * (2 ** attempt))
+            print(
+                f"    LLM call failed ({exc!r}); "
+                f"retrying in {wait}s (attempt {attempt + 1}/{retries})...",
+                file=sys.stderr,
+            )
             time.sleep(wait)
     raise RuntimeError(f"LLM call failed after {retries} retries: {last_err}")
 
@@ -252,7 +258,7 @@ def _extract_metadata(client, model, text, source_url, filename):
             "only — no markdown fences, no preamble. Match the schema "
             "exactly."
         ),
-        max_tokens=1200,
+        max_tokens=800,
         temperature=0.0,
     )
     # Strip accidental markdown fences if the model added them.
@@ -361,7 +367,19 @@ def _summarise_document(path, downloads_dir, summaries_dir, manifest,
     source_url = _find_source_url(manifest, relpath)
 
     print(f"  metadata + topics ...")
-    metadata = _extract_metadata(client, model, text, source_url, path.name)
+    try:
+        metadata = _extract_metadata(client, model, text, source_url, path.name)
+    except Exception as exc:
+        # A 504 / overload on the metadata call shouldn't kill the doc:
+        # we still want the RAPTOR summary, just with empty frontmatter
+        # fields. The user can re-run with --force later to retry only
+        # the metadata, or fill it in by hand.
+        print(
+            f"    metadata extraction failed ({exc}); "
+            f"continuing with empty metadata.",
+            file=sys.stderr,
+        )
+        metadata = {"_metadata_error": str(exc)}
 
     chunks = _chunk_words(text)
     if not chunks:
@@ -394,6 +412,8 @@ def _summarise_document(path, downloads_dir, summaries_dir, manifest,
     }
     if "_raw_metadata" in metadata:
         front["_raw_metadata"] = metadata["_raw_metadata"]
+    if "_metadata_error" in metadata:
+        front["_metadata_error"] = metadata["_metadata_error"]
 
     front_yaml = yaml.safe_dump(
         front, sort_keys=False, allow_unicode=True, width=10_000
